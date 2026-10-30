@@ -5,7 +5,7 @@ from fastapi import FastAPI
 app = FastAPI(title="release-pipeline-mini")
 
 # Versi diisi saat build (lihat Dockerfile, ARG APP_VERSION) atau lewat env.
-VERSION = os.getenv("APP_VERSION", "dev")
+VERSION = "hardcoded"
 
 
 @app.get("/health")
