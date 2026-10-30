@@ -1,0 +1,137 @@
+name: CD
+
+# Dev  : otomatis tiap ada merge ke main
+# UAT  : otomatis saat ada tag versi (v*), contoh v0.1.0
+# Prod : setelah UAT sukses DAN disetujui manual (environment "prod")
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # Bangun satu kali, pakai di semua tahap ("build once, deploy many").
+  build-push:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tentukan versi dan nama image
+        id: meta
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            VERSION="sha-${GITHUB_SHA::7}"
+          fi
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build dan push image
+        run: |
+          IMG="${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}"
+          docker build \
+            --build-arg APP_VERSION=${{ steps.meta.outputs.version }} \
+            --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \
+            -t "$IMG" .
+          docker push "$IMG"
+
+  deploy-dev:
+    if: github.ref_type == 'branch'
+    needs: build-push
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Deploy ke dev
+        env:
+          TARGET_ENV: dev
+          IMAGE: ${{ needs.build-push.outputs.image }}
+          VERSION: ${{ needs.build-push.outputs.version }}
+        run: |
+          START=$(date +%s)
+          docker pull "$IMAGE:$VERSION"
+          docker run -d --name app -p 8000:8000 "$IMAGE:$VERSION"
+          for i in $(seq 1 10); do curl -fs localhost:8000/health && break || sleep 2; done
+          ACTUAL=$(curl -fs localhost:8000/version)
+          echo "Versi berjalan: $ACTUAL"
+          echo "$ACTUAL" | grep -q "$VERSION"
+          END=$(date +%s)
+          echo "deploy | $(date -u +%FT%TZ) | $TARGET_ENV | $VERSION | success | $((END-START))s" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  deploy-uat:
+    if: github.ref_type == 'tag'
+    needs: build-push
+    runs-on: ubuntu-latest
+    environment: uat
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Deploy ke uat
+        env:
+          TARGET_ENV: uat
+          IMAGE: ${{ needs.build-push.outputs.image }}
+          VERSION: ${{ needs.build-push.outputs.version }}
+        run: |
+          START=$(date +%s)
+          docker pull "$IMAGE:$VERSION"
+          docker run -d --name app -p 8000:8000 "$IMAGE:$VERSION"
+          for i in $(seq 1 10); do curl -fs localhost:8000/health && break || sleep 2; done
+          ACTUAL=$(curl -fs localhost:8000/version)
+          echo "Versi berjalan: $ACTUAL"
+          echo "$ACTUAL" | grep -q "$VERSION"
+          END=$(date +%s)
+          echo "deploy | $(date -u +%FT%TZ) | $TARGET_ENV | $VERSION | success | $((END-START))s" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  deploy-prod:
+    if: github.ref_type == 'tag'
+    needs: [build-push, deploy-uat]
+    runs-on: ubuntu-latest
+    environment: prod   # berhenti di sini sampai disetujui reviewer
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Deploy ke prod
+        env:
+          TARGET_ENV: prod
+          IMAGE: ${{ needs.build-push.outputs.image }}
+          VERSION: ${{ needs.build-push.outputs.version }}
+        run: |
+          START=$(date +%s)
+          docker pull "$IMAGE:$VERSION"
+          docker run -d --name app -p 8000:8000 "$IMAGE:$VERSION"
+          for i in $(seq 1 10); do curl -fs localhost:8000/health && break || sleep 2; done
+          ACTUAL=$(curl -fs localhost:8000/version)
+          echo "Versi berjalan: $ACTUAL"
+          echo "$ACTUAL" | grep -q "$VERSION"
+          END=$(date +%s)
+          echo "deploy | $(date -u +%FT%TZ) | $TARGET_ENV | $VERSION | success | $((END-START))s" | tee -a "$GITHUB_STEP_SUMMARY"
