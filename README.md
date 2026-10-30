@@ -19,6 +19,7 @@ Pipeline rilis mini: API FastAPI, Docker, CI GitHub Actions. Tahap berikutnya: C
 
 - [x] Sesi 1: aplikasi, tes, Docker
 - [x] Sesi 2: CI (lint, tes, build, smoke test)
+- [x] Branch protection aktif
 - [ ] Sesi 3: CD Dev/UAT/Prod, rollback
 - [ ] Sesi 4: Ansible, changelog, log deployment CSV
 
