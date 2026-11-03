@@ -5,6 +5,11 @@ Reads the workflow runs named "CD" and "Rollback" through the GitHub REST API,
 looks at the deploy jobs inside each run, and writes one CSV row per job that
 actually ran (skipped jobs are left out).
 
+Besides the whole-job duration (duration_s), each row has:
+  queued_s         seconds the job waited before a runner picked it up
+  deploy_step_s    seconds of the step that does the real deploy or rollback
+  outside_steps_s  duration_s minus all step durations (time outside the steps)
+
 Usage:
     python scripts/export_deploy_log.py ahmadfauzanrinaufaldi/release-pipeline-mini
     python scripts/export_deploy_log.py OWNER/REPO --out data/deploy_log.csv
@@ -29,8 +34,12 @@ ROLLBACK_TITLE = re.compile(r"^Rollback (\S+) to (\S+)$")
 
 COLUMNS = [
     "kind", "environment", "version", "result", "started_at", "completed_at",
-    "duration_s", "gap_since_uat_s", "commit_sha", "actor", "event", "run_id", "run_url",
+    "duration_s", "queued_s", "deploy_step_s", "outside_steps_s", "gap_since_uat_s",
+    "commit_sha", "actor", "event", "run_id", "run_url",
 ]
+
+# Names of the workflow step that does the actual deploy / rollback work.
+DEPLOY_STEP_NAMES = {"Deploy ke dev", "Deploy ke uat", "Deploy ke prod", "Pulihkan versi"}
 
 
 def get(path):
@@ -56,6 +65,31 @@ def parse_time(value):
 
 def seconds(start, end):
     return int((end - start).total_seconds()) if start and end else ""
+
+
+def step_seconds(step):
+    return seconds(parse_time(step.get("started_at")), parse_time(step.get("completed_at")))
+
+
+def step_metrics(job, job_started, job_duration):
+    """Return (deploy_step_s, outside_steps_s) for one job.
+
+    deploy_step_s    - duration of the step that really deploys or rolls back.
+    outside_steps_s  - job duration minus the sum of all step durations: time
+                       spent outside the steps (runner start-up, cleanup).
+    """
+    steps = job.get("steps") or []
+    deploy = ""
+    total = 0
+    for step in steps:
+        secs = step_seconds(step)
+        if secs == "":
+            continue
+        total += secs
+        if step.get("name") in DEPLOY_STEP_NAMES:
+            deploy = secs
+    outside = job_duration - total if steps and job_duration != "" else ""
+    return deploy, outside
 
 
 def fetch_runs(repo):
@@ -89,6 +123,9 @@ def rows_for_run(repo, run):
             continue
         started = parse_time(job.get("started_at"))
         completed = parse_time(job.get("completed_at"))
+        duration = seconds(started, completed)
+        queued = seconds(parse_time(job.get("created_at")), started)
+        deploy_step, outside_steps = step_metrics(job, started, duration)
         gap = ""
         if run["name"] == "Rollback" and job["name"] == "rollback":
             match = ROLLBACK_TITLE.match(run.get("display_title", ""))
@@ -104,7 +141,9 @@ def rows_for_run(repo, run):
             "kind": kind, "environment": env, "version": version,
             "result": job["conclusion"],
             "started_at": job.get("started_at", ""), "completed_at": job.get("completed_at", ""),
-            "duration_s": seconds(started, completed), "gap_since_uat_s": gap,
+            "duration_s": duration, "queued_s": queued,
+            "deploy_step_s": deploy_step, "outside_steps_s": outside_steps,
+            "gap_since_uat_s": gap,
             "commit_sha": run["head_sha"][:7],
             "actor": (run.get("actor") or {}).get("login", ""),
             "event": run["event"], "run_id": run["id"], "run_url": run["html_url"],
