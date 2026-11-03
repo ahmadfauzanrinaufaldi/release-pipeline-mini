@@ -1,0 +1,59 @@
+---
+# Playbook: pasang Docker dan jalankan release-pipeline-mini versi tertentu.
+# Jalankan dari root repo:
+#   ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --ask-become-pass
+# Ganti versi tanpa mengedit file:
+#   ... -e app_version=v0.1.0
+- name: Deploy release-pipeline-mini ke Linux lokal
+  hosts: local
+  become: true
+  vars:
+    app_image: ghcr.io/ahmadfauzanrinaufaldi/release-pipeline-mini
+    app_version: v0.2.1
+    app_port: 8000
+
+  tasks:
+    - name: Pasang Docker dan pustaka Python untuk Ansible
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - python3-docker
+        state: present
+        update_cache: true
+
+    - name: Pastikan layanan Docker berjalan
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Jalankan container aplikasi
+      community.docker.docker_container:
+        name: release-pipeline-mini
+        image: "{{ app_image }}:{{ app_version }}"
+        state: started
+        restart_policy: unless-stopped
+        published_ports:
+          - "{{ app_port }}:8000"
+
+    - name: Tunggu sampai /health menjawab
+      ansible.builtin.uri:
+        url: "http://localhost:{{ app_port }}/health"
+        status_code: 200
+      register: health
+      retries: 10
+      delay: 2
+      until: health.status == 200
+
+    - name: Baca versi yang sedang berjalan
+      ansible.builtin.uri:
+        url: "http://localhost:{{ app_port }}/version"
+        return_content: true
+      register: running
+
+    - name: Pastikan versi yang berjalan sesuai yang dimaksud
+      ansible.builtin.assert:
+        that:
+          - running.json.version == app_version
+        success_msg: "OK: versi {{ running.json.version }} berjalan"
+        fail_msg: "Versi berjalan {{ running.json.version }}, seharusnya {{ app_version }}"
