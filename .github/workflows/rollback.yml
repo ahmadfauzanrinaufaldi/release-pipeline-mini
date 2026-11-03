@@ -1,4 +1,5 @@
 name: Rollback
+run-name: Rollback ${{ inputs.target_env }} to ${{ inputs.version }}
 
 # Jalankan manual dari tab Actions: pilih environment dan versi yang ingin dipulihkan.
 on:
