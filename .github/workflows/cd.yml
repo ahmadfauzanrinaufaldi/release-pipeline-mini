@@ -135,3 +135,18 @@ jobs:
           echo "$ACTUAL" | grep -q "$VERSION"
           END=$(date +%s)
           echo "deploy | $(date -u +%FT%TZ) | $TARGET_ENV | $VERSION | success | $((END-START))s" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # Changelog otomatis: dibuat hanya setelah rilis bertag sukses sampai Prod.
+  release-notes:
+    if: github.ref_type == 'tag'
+    needs: deploy-prod
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # hanya job ini yang boleh membuat Release
+    steps:
+      - name: Buat GitHub Release dengan catatan perubahan otomatis
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --title "$TAG" --generate-notes
